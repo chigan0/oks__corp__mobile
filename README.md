@@ -1,9 +1,11 @@
 # OKS QR Mobile
 
-Мобильное приложение на Flutter для **OKS Group** — контроль допуска на строительные объекты. Поддерживаются две роли:
+Мобильное приложение **OKS Group** на Flutter для контроля допуска на строительные объекты. Пользователь проходит корпоративную авторизацию через **OKS ID**, получает роль по permissions с бэкенда и работает в одном из двух сервисов:
 
-- **Worker (работник)** — просмотр назначенных объектов, показ QR-пропуска, история посещений, документы профиля.
-- **Guard (охранник)** — сканирование QR-кодов работников на КПП и выдача или отказ в допуске.
+| Роль в приложении | Permission (OKS ID) | Сервис |
+|---|---|---|
+| **Worker** — работник на объектах | `core:security_staff` | QR-пропуск, список объектов, профиль |
+| **Guard** — охранник на КПП | `facilities:manager` | Сканирование QR и выдача/отказ в допуске |
 
 Код организован по **Feature-Sliced Design (FSD)**: слои разделены по зонам ответственности (`app`, `entities`, `features`, `screens`, `shared`).
 
@@ -16,281 +18,409 @@
 | Фреймворк | Flutter (Dart SDK ^3.12) |
 | Маршрутизация | `go_router` |
 | Состояние | `provider` (`ChangeNotifier`) |
+| HTTP / API | `dio` |
+| Безопасное хранение JWT | `flutter_secure_storage` |
+| Мониторинг сети | `connectivity_plus` |
 | Генерация QR | `qr_flutter` |
 | Сканирование QR | `mobile_scanner` |
 | SVG-ресурсы | `flutter_svg` |
+| Шрифт | Manrope (variable font) |
 | Форматирование дат | `intl` |
+| Skeleton-загрузка | `shimmer` |
+
+---
+
+## Быстрый старт
+
+```bash
+flutter pub get
+flutter run
+```
+
+Release APK:
+
+```bash
+flutter clean
+flutter build apk --release
+```
+
+Артефакт: `build/app/outputs/flutter-apk/app-release.apk`
+
+### Переменные окружения
+
+| Переменная | Назначение | Значение по умолчанию |
+|---|---|---|
+| `API_BASE_URL` | Base URL OKS ID API | `https://api.id.oks.group/api/v1` |
+
+Пример:
+
+```bash
+flutter run --dart-define=API_BASE_URL=https://api.id.oks.group/api/v1
+```
+
+---
+
+## Архитектура
+
+### Слои FSD
+
+```
+lib/
+├── main.dart              # Точка входа → AppBootstrap
+├── app/                   # Тема, роутер, DI, корневой виджет
+├── entities/              # Доменные модели и репозитории данных
+├── features/              # Бизнес-возможности (auth, profile, QR, …)
+├── screens/               # Полноэкранные маршруты (композиция features + shared)
+└── shared/                # API-клиент, auth-инфраструктура, UI-кит, утилиты
+```
+
+### Правила зависимостей
+
+```
+screens  →  features, entities, shared, app
+features →  entities, shared, app
+entities →  (без импортов «вверх» по слоям)
+shared   →  app (только токены темы / конфиг)
+app      →  features, screens (сборка роутера и DI)
+```
+
+- **screens** — собирают экран из features и shared, привязаны к маршрутам `go_router`.
+- **features** — одна пользовательская возможность: auth, profile, qr_display, connectivity и т.д.
+- **entities** — чистые модели и доступ к данным без UI.
+- **shared** — переиспользуемые компоненты дизайн-системы, Dio, interceptors, secure storage.
+- **app** — глобальная конфигурация: тема, роутинг, `AppDependencies`.
+
+### Запуск приложения
+
+```
+main.dart
+  └── AppBootstrap                    # async-инициализация DI
+        └── AppDependencies.init()    # Dio, TokenStorage, AuthRepository, ProfileApi
+              └── OksQrApp            # MultiProvider + MaterialApp.router
+                    └── OfflineAppShell   # глобальный offline-overlay
+```
+
+**Provider-дерево** (`OksQrApp`):
+
+| Provider | Назначение |
+|---|---|
+| `AuthNotifier` | Состояние авторизации, polling approval |
+| `ProfileApi` | `GET /accounts/me/` |
+| `TokenStorage` | JWT + pending approval в secure storage |
+| `ConnectivityNotifier` | Отслеживание Wi‑Fi / мобильных данных |
+| `LanguageNotifier` | Язык интерфейса RU / KZ (worker) |
+| `ObjectsNotifier` | Список строительных объектов |
+
+---
+
+## Авторизация (OKS ID)
+
+Интеграция с production API **`https://api.id.oks.group/api/v1`**. Mock-слой отключён — все auth-запросы идут на реальный бэкенд.
+
+### Поток входа
+
+```
+AuthScreen                    ApprovalWaitingScreen              RoleSelectionScreen
+(ввод телефона)        →      (ожидание admin approval)   →     (Мои сервисы)
+     │                              │                                │
+     │ POST /auth/phone/approval/   │ GET …/approval/{code}/status/│ GET /accounts/me/
+     │                              │ каждые 3 сек                   │ permissions → роль
+     │                              │ POST /auth/verify/ (approved)  │
+     │                              │ JWT → secure storage           │
+```
+
+### API-эндпоинты auth
+
+| Метод | Путь | Когда вызывается |
+|---|---|---|
+| `POST` | `/auth/phone/approval/` | Пользователь нажал «Войти» на экране авторизации |
+| `GET` | `/auth/approval/{code}/status/` | Polling каждые 3 сек на экране ожидания |
+| `POST` | `/auth/verify/` | Статус `approved` — обмен code на JWT |
+| `POST` | `/auth/refresh/` | Автоматически при 401 (через interceptor) |
+| `GET` | `/accounts/me/` | Профиль и permissions после входа |
+
+Тело verify:
+
+```json
+{
+  "type": "approval",
+  "code": "<approval_code>",
+  "refreshTtlDays": 30
+}
+```
+
+### Состояния `AuthFlowState`
+
+| Состояние | Описание |
+|---|---|
+| `initial` | Не авторизован |
+| `submittingPhone` | Отправка номера на approval |
+| `waitingForApproval` | Есть approval code, идёт polling |
+| `denied` | Администратор отклонил запрос |
+| `authenticated` | JWT сохранены, сессия активна |
+| `error` | Сетевая или HTTP-ошибка |
+
+### Защита от перебора
+
+- После **5 неудачных попыток** входа — блокировка на **65 секунд**.
+- Обратный отсчёт отображается под сообщением о блокировке на экране авторизации.
+- По истечении таймера пользователь может повторить попытку без перезапуска приложения.
+
+### Persistence pending approval
+
+Если пользователь закрыл приложение во время ожидания подтверждения, `(phone, approvalCode)` сохраняются в **flutter_secure_storage**. При следующем запуске приложение восстанавливает состояние `waitingForApproval` и продолжает polling.
+
+### Сетевой слой auth
+
+Два экземпляра **Dio**:
+
+| Клиент | Назначение |
+|---|---|
+| `publicDio` | Auth-эндпоинты до входа (approval, verify, refresh) |
+| `authenticatedDio` | Защищённые запросы с JWT (`ProfileApi` и далее) |
+
+**`AuthInterceptor`** (на `authenticatedDio`):
+
+- Подставляет `Authorization: Bearer <access_token>` ко всем запросам, кроме публичных auth-путей.
+- При **401** — прозрачный refresh через `POST /auth/refresh/`.
+- Если refresh не удался — logout и `AuthSessionExpiredException`.
+
+Ключевые файлы:
+
+```
+lib/features/auth/
+├── api/auth_api.dart
+├── repository/auth_repository.dart
+├── auth_notifier.dart
+└── model/                  # AuthTokens, ApprovalStatus, PhoneApprovalResponse, …
+
+lib/shared/auth/
+├── auth_interceptor.dart
+├── token_storage.dart
+└── auth_session_expired_exception.dart
+
+lib/shared/api/
+├── api_config.dart
+├── dio_client.dart
+└── dio_logging.dart
+```
+
+---
+
+## Роли и экран «Мои сервисы»
+
+После успешной авторизации пользователь попадает на **`RoleSelectionScreen`** (`/roles`).
+
+1. Вызывается **`GET /accounts/me/`** через `ProfileApi`.
+2. Из поля **`permissions`** извлекаются коды ролей.
+3. Маппинг (`AccountPermissions`):
+
+   - `facilities:manager` → `ServiceType.guard`
+   - `core:security_staff` → `ServiceType.worker`
+
+4. Пользователь видит **только свою роль** (переключатель сервисов скрыт, если роль одна).
+5. Если permissions пуст — сообщение об ошибке, кнопка **«Перейти»** скрыта; доступны **Профиль** и **Выход**.
+6. Нажатие на логотип **OKS Group** в шапке (на всех экранах кроме auth) ведёт на `/roles`.
 
 ---
 
 ## Навигация
 
 ```
-/                          → RoleSelectionScreen
-/guard                     → GuardMainScreen
-/guard/scanner             → GuardScannerScreen
-/worker                    → WorkerMainScreen
-/worker/object/:id         → ObjectDetailsScreen
+/                          → AuthScreen              (ввод телефона)
+/approval-waiting          → ApprovalWaitingScreen   (polling admin approval)
+/roles                     → RoleSelectionScreen     (Мои сервисы)
+/worker                    → WorkerMainScreen        (Мой пропуск)
+/worker/object/:id         → ObjectDetailsScreen     (карточка объекта)
+/guard                     → GuardMainScreen         (Охрана КПП)
+/guard/scanner             → GuardScannerScreen      (сканер QR)
 ```
 
----
+### Redirect-логика (`app_router.dart`)
 
-## Обзор архитектуры
-
-```
-lib/
-├── main.dart                 # Точка входа приложения
-├── app/                      # Оболочка приложения (тема, роутер, корневой виджет)
-├── entities/                 # Доменные модели и mock-репозитории
-├── features/                 # Пользовательские возможности (QR, профиль, допуск и т.д.)
-├── screens/                  # Полноэкранные маршруты
-└── shared/                   # Переиспользуемые UI-компоненты и константы
-```
-
-Данные сейчас поступают из **mock-репозиториев** в `entities/*/repository/`. Реальный backend пока не подключён.
+- Неавторизованный пользователь может находиться только на `/` и `/approval-waiting`.
+- При `isWaitingForApproval` и переходе на `/` — редирект на `/approval-waiting`.
+- Авторизованный на auth-маршрутах — редирект на `/roles`.
+- `GoRouter.refreshListenable` привязан к `AuthNotifier` — роутер реагирует на смену auth-состояния.
 
 ---
 
-## Справочник файлов
+## Глобальный offline-overlay
 
-Ниже перечислены все исходные файлы проекта: для каждого указан основной тип (класс, enum, функция) и краткое описание назначения и принципа работы.
+`ConnectivityNotifier` + `OfflineAppShell` оборачивают всё приложение через `MaterialApp.builder`.
 
-### Корень проекта
+При потере Wi‑Fi или мобильных данных:
 
-| Файл | Объект | Описание |
-|---|---|---|
-| `lib/main.dart` | — | Точка входа приложения; вызывает `runApp(OksQrApp)` и запускает Flutter-дерево виджетов. |
-| `pubspec.yaml` | — | Метаданные проекта, зависимости и список подключаемых ресурсов (assets). |
-| `analysis_options.yaml` | — | Настройки анализатора Dart и правил линтинга. |
-| `test/widget_test.dart` | — | Дымовой тест: монтирует `OksQrApp` и проверяет, что экран выбора роли отображается. |
+- Показывается полноэкранный блокер с `warning.svg`.
+- Все кнопки и сервисы заблокированы до восстановления связи.
+- Overlay автоматически скрывается при возвращении сети.
 
----
-
-### `lib/app/` — Слой приложения
-
-| Файл | Объект | Описание |
-|---|---|---|
-| `app/app.dart` | `OksQrApp` | Корневой виджет: оборачивает приложение в `ChangeNotifierProvider<LanguageNotifier>` и настраивает `MaterialApp.router`. |
-| `app/router/app_router.dart` | `appRouter` | Экземпляр `GoRouter` — описывает все маршруты и параметры пути (`:id` и т.д.). |
-| `app/theme/app_theme.dart` | `AppTheme` | Светлая тема `ThemeData`, собранная из дизайн-токенов (цвета, радиусы, типографика). |
-| `app/theme/app_colors.dart` | `AppColors` | Централизованная палитра цветов (navy, жёлтый, статусы green/red, фоны и т.д.). |
-| `app/theme/app_spacing.dart` | `AppSpacing` | Шкала отступов (`xs`–`xxxl`). |
-| `app/theme/app_radius.dart` | `AppRadius` | Токены скругления углов (`sm`–`pill`). |
+Файлы: `lib/features/connectivity/`, `lib/shared/ui/offline_blocking_overlay.dart`.
 
 ---
 
-### `lib/entities/` — Доменный слой
+## Данные объектов
 
-#### `construction_object/` — строительный объект
+Список строительных объектов на экране worker формируется через **`ObjectsNotifier`** → **`ObjectRepository`**:
 
-| Файл | Объект | Описание |
-|---|---|---|
-| `model/construction_object.dart` | `ConstructionObject` | Основная доменная модель объекта строительства: название, адрес, статусы, документы, payload для QR. |
-| `model/access_status.dart` | `AccessStatus` | Enum допуска: `granted` / `denied`; содержит локализованные подписи (RU/KZ). |
-| `model/object_status.dart` | `ObjectStatus` | Enum статуса объекта: `underConstruction` / `completed`; содержит локализованные подписи. |
-| `model/object_document.dart` | `ObjectDocument` | Прикреплённый к объекту файл (id, имя файла, дата загрузки). |
-| `repository/mock_object_repository.dart` | `MockObjectRepository` | Singleton с mock-данными объектов; методы `findById` и `getAccessibleObjects` для выборки. |
+- **4 локальных mock-объекта** — всегда доступны как fallback.
+- **3 объекта из JSONPlaceholder** (`/users/5`, `/users/6`, `/users/7`) — подгружаются асинхронно и маппятся в `ConstructionObject`.
 
-#### `user_profile/` — профиль пользователя
+При ошибке загрузки API приложение продолжает работать с локальными mock-данными.
 
-| Файл | Объект | Описание |
-|---|---|---|
-| `model/user_profile.dart` | `UserProfile` | Профиль работника: ФИО, компания, ИИН, телефон, список документов. |
-| `model/personal_document.dart` | `PersonalDocument` | Метаданные личного документа (id, имя файла, дата загрузки). |
-| `repository/mock_user_repository.dart` | `MockUserRepository` | Singleton с mock-профилем работника; используется в worker- и guard-потоках. |
-
-#### `worker/` — отсканированный работник
-
-| Файл | Объект | Описание |
-|---|---|---|
-| `model/scanned_worker.dart` | `ScannedWorker` | Данные работника после сканирования QR охранником: имя, компания, ИИН, телефон, объект. |
-
-#### `visit_history/` — история посещений
-
-| Файл | Объект | Описание |
-|---|---|---|
-| `model/visit_record.dart` | `VisitRecord` | Запись одного посещения: объект, адрес, время, результат (допуск / отказ). |
-| `repository/mock_visit_repository.dart` | `MockVisitRepository` | Singleton со списком mock-записей посещений для вкладки «История» работника. |
-
-#### `service_type/` — тип сервиса
-
-| Файл | Объект | Описание |
-|---|---|---|
-| `model/service_type.dart` | `ServiceType` | Enum роли: `worker` / `guard`; хранит заголовок, описание и маршрут для экрана выбора сервиса. |
-
----
-
-### `lib/features/` — Слой фич
-
-#### `access_confirmation/` — подтверждение допуска
-
-| Файл | Объект | Описание |
-|---|---|---|
-| `widgets/confirm_access_sheet.dart` | `ConfirmAccessSheet`, `_InfoRow` | Bottom sheet после успешного сканирования QR: данные работника и кнопки «Допуск» / «Отказ». |
-| `widgets/success_dialog.dart` | `SuccessDialog` | Модальный диалог об успешной выдаче допуска работнику. |
-| `widgets/denial_dialog.dart` | `DenialDialog` | Модальный диалог отказа в допуске с полем для указания причины. |
-| `widgets/reject_dialog.dart` | `RejectDialog` | Модальный диалог при недействительном или отклонённом QR-коде. |
-
-#### `language_switcher/` — переключение языка
-
-| Файл | Объект | Описание |
-|---|---|---|
-| `language_notifier.dart` | `AppLanguage`, `LanguageNotifier` | `ChangeNotifier` с текущим языком приложения (`ru` / `kz`); переключается из нижней панели worker-экрана. |
-
-#### `profile/` — профиль
-
-| Файл | Объект | Описание |
-|---|---|---|
-| `widgets/profile_sheet.dart` | `ProfileSheet` | Перетаскиваемый bottom sheet с данными профиля работника и списком личных документов. |
-
-#### `qr_display/` — отображение QR
-
-| Файл | Объект | Описание |
-|---|---|---|
-| `widgets/qr_pass_sheet.dart` | `QrPassSheet` | Bottom sheet с QR-кодом пропуска для выбранного строительного объекта. |
-| `widgets/object_select_sheet.dart` | `YellowActionButton`, `ObjectSelectTile` | Жёлтая кнопка действия и строка выбора объекта при открытии QR-пропуска. |
-
-#### `qr_scanning/` — сканирование QR
-
-| Файл | Объект | Описание |
-|---|---|---|
-| `api/mock_scan_api.dart` | `ScanApiResult`, `MockScanApi` | Mock-API: имитирует проверку QR-кода и возвращает `ScannedWorker` с задержкой. |
-| `widgets/scan_overlay.dart` | `ScanOverlay`, `_ScannerMaskPainter`, `_ScannerCornerPainter` | Оверлей камеры: затемнение, прозрачная область сканирования, жёлтые угловые акценты и подсказка. |
-
-#### `service_switcher/` — переключатель сервиса
-
-| Файл | Объект | Описание |
-|---|---|---|
-| `widgets/service_switcher.dart` | `ServiceSwitcher`, `_ServiceToggleButton` | Переключатель кран/шлагбаум на экране выбора роли (Worker / Guard). |
-
----
-
-### `lib/screens/` — Слой экранов
-
-| Файл | Объект | Описание |
-|---|---|---|
-| `role_selection/role_selection_screen.dart` | `RoleSelectionScreen` | Стартовый экран: переключатель сервиса, иконка-герой, описание и кнопка «Перейти». |
-| `guard/guard_main_screen.dart` | `GuardMainScreen` | Главный экран охранника: назначенный объект и кнопка перехода к сканеру QR. |
-| `guard/guard_scanner_screen.dart` | `GuardScannerScreen` | Полноэкранный сканер камеры (`MobileScanner`); цепочка: скан → подтверждение → допуск/отказ. |
-| `worker/worker_main_screen.dart` | `WorkerMainScreen`, `_ObjectSelectBottomSheet`, `_VisitCard` | Главный экран работника: вкладки «Объекты» / «История», нижняя панель, профиль и QR. |
-| `worker/object_details_screen.dart` | `ObjectDetailsScreen`, `_ObjectSelectBottomSheet` | Детальная страница объекта: статус, даты, документы, доступ к QR-пропуску. |
-
----
-
-### `lib/shared/` — Общий слой
-
-#### `constants/`
-
-| Файл | Объект | Описание |
-|---|---|---|
-| `constants/app_assets.dart` | `AppAssets` | Константы путей к ресурсам: кран, шлагбаум, QR, профиль. |
-
-#### `ui/`
-
-| Файл | Объект | Описание |
-|---|---|---|
-| `ui/object_card.dart` | `ObjectCard` | Серая информационная карточка объекта: иконка, название, адрес, бейдж допуска, chevron. |
-| `ui/status_badge.dart` | `StatusBadge` | Индикатор статуса допуска (зелёная галочка / красный крест + локализованная подпись). |
-| `ui/oks_header.dart` | `OksGroupLogo`, `OksHeader` | Фирменный логотип OKS Group и заголовок экрана с опциональным подзаголовком. |
-| `ui/app_asset_icon.dart` | `AppAssetIcon` | Универсальный рендер SVG/PNG с опциональной перекраской и fallback на Material Icons. |
-| `ui/app_primary_button.dart` | `AppPrimaryButton` | Основная тёмная кнопка на всю ширину (экран выбора роли). |
-| `ui/app_bottom_sheet_shell.dart` | `AppBottomSheetShell`, `showAppModalBottomSheet` | Обёртка для перетаскиваемых bottom sheet и хелпер открытия модальных листов. |
-| `ui/floating_bottom_bar.dart` | `FloatingBottomBar`, `_CircleIconButton` | Плавающая нижняя панель worker-экрана: профиль, QR, переключение языка. |
-| `ui/segment_tabs.dart` | `SegmentTabs` | Анимированные сегментированные вкладки с «пилюлей» (Объекты / История). |
-| `ui/icon_circle_button.dart` | `IconCircleButton` | Круглая кнопка с иконкой (заголовок сканера, экран деталей). |
-| `ui/detail_row.dart` | `DetailRow` | Строка «метка + значение» для полей детальной информации об объекте. |
-| `ui/document_tile.dart` | `DocumentTile` | Строка файла: имя, дата загрузки, опциональное действие скачивания. |
-
----
-
-### `assets/` — Статические ресурсы
-
-| Файл | Объект | Описание |
-|---|---|---|
-| `assets/crane.svg` | Иконка крана | Иконка строительства / worker-сервиса. |
-| `assets/barrier.svg` | Иконка шлагбаума | Иконка охраны / guard-сервиса (КПП). |
-| `assets/icon_qr.png` | Иконка QR | PNG-иконка для кнопок, связанных с QR-кодом. |
-| `assets/icon_profile.png` | Иконка профиля | PNG-иконка кнопки профиля в нижней панели. |
-
----
-
-### `android/` — Платформа Android
-
-| Файл | Объект | Описание |
-|---|---|---|
-| `android/app/build.gradle.kts` | — | Gradle-конфигурация модуля app: версии SDK, ProGuard для release, зависимость ML Kit для штрихкодов. |
-| `android/app/proguard-rules.pro` | — | Правила ProGuard для Google ML Kit barcode scanning в release-сборках. |
-| `android/app/src/main/AndroidManifest.xml` | — | Манифест: разрешение камеры, meta-data ML Kit barcode, launcher activity. |
-| `android/app/src/main/kotlin/com/oksgroup/oks_qr_mobile/MainActivity.kt` | `MainActivity` | Точка входа Flutter embedding на Android. |
-| `android/app/src/main/res/values/styles.xml` | — | Светлая тема запуска (splash). |
-| `android/app/src/main/res/values-night/styles.xml` | — | Тёмная тема запуска (splash). |
-| `android/app/src/main/res/drawable/launch_background.xml` | — | Фон splash-экрана (API < 21). |
-| `android/app/src/main/res/drawable-v21/launch_background.xml` | — | Фон splash-экрана (API 21+). |
-| `android/build.gradle.kts` | — | Gradle-конфигурация уровня проекта. |
-| `android/settings.gradle.kts` | — | Настройки Gradle и управление плагинами. |
+Профиль работника в bottom sheet пока берётся из **`MockUserRepository`** (UI-заглушка). Аккаунт с бэкенда — через **`AccountProfileSheet`** (`GET /accounts/me/`) на экране «Мои сервисы».
 
 ---
 
 ## Пользовательские сценарии
 
-### Сценарий работника (Worker)
+### Worker (работник)
 
 ```
-RoleSelectionScreen (Worker)
+RoleSelectionScreen
   → WorkerMainScreen
-      ├── Вкладка «Объекты» → список ObjectCard → ObjectDetailsScreen
-      ├── Вкладка «История» → карточки посещений
-      ├── Нижняя панель: Профиль → ProfileSheet
-      ├── Нижняя панель: QR → выбор объекта → QrPassSheet
-      └── Нижняя панель: переключение языка (RU ↔ KZ)
+      ├── Вкладка «Объекты»     → ObjectCard → ObjectDetailsScreen
+      ├── Вкладка «История»     → placeholder «блок в разработке»
+      ├── Нижняя панель: Профиль → ProfileSheet (mock)
+      ├── Нижняя панель: QR     → ObjectSelectSheet → QrPassSheet
+      └── Нижняя панель: Язык   → LanguageSheet (RU ↔ KZ)
 ```
 
-### Сценарий охранника (Guard)
+Верхний блок (шапка, табы, подсказка) **закреплён** — скроллятся только карточки объектов.
+
+Системная кнопка «Назад» на worker-экранах возвращает на `/roles`.
+
+### Guard (охранник)
 
 ```
-RoleSelectionScreen (Guard)
+RoleSelectionScreen
   → GuardMainScreen
       → GuardScannerScreen
           ├── Скан QR → ConfirmAccessSheet
-          ├── Допуск → SuccessDialog
-          ├── Отказ → DenialDialog
-          └── Недействительный QR → RejectDialog
+          ├── Допуск  → SuccessDialog
+          ├── Отказ   → DenialDialog
+          └── Невалидный QR → RejectDialog
+```
+
+Сканирование — mock через **`MockScanApi`** (имитация задержки и ответа).
+
+Системная кнопка «Назад» на guard-экранах возвращает на `/roles`.
+
+---
+
+## UI и дизайн-система
+
+| Компонент | Файл | Назначение |
+|---|---|---|
+| `OksHeader` / `OksGroupLogo` | `shared/ui/oks_header.dart` | Шапка экрана + wordmark OKS Group |
+| `AppPrimaryButton` | `shared/ui/app_primary_button.dart` | Основная тёмная кнопка |
+| `SheetIconButton` | `shared/ui/bottom_sheets/sheet_icon_button.dart` | Круглая кнопка 42×42 с тенью |
+| `FloatingBottomBar` | `shared/ui/floating_bottom_bar.dart` | Нижняя панель worker (профиль / QR / язык) |
+| `AppBottomSheetShell` | `shared/ui/bottom_sheets/app_bottom_sheet_shell.dart` | Стандартный modal bottom sheet |
+| `SegmentTabs` | `shared/ui/segment_tabs.dart` | Переключатель «Объекты / История» |
+| `ObjectCard` | `shared/ui/object_card.dart` | Карточка объекта в списке |
+| `SpinningAsset` | `shared/ui/spinning_asset.dart` | Брендированный loader |
+| Skeleton-виджеты | `shared/ui/skeleton/` | Shimmer-заглушки при загрузке |
+
+Типографика: **Manrope** через `manropeTextStyle()` с `FontVariation.weight` (variable font).  
+Токены: `app/theme/` — `AppColors`, `AppSpacing`, `AppRadius`, `AppTypography`.
+
+---
+
+## Структура `lib/` (ключевые модули)
+
+```
+lib/
+├── main.dart
+├── app/
+│   ├── app.dart                    # OksQrApp, AppBootstrap
+│   ├── di/app_dependencies.dart    # Singleton DI
+│   ├── router/app_router.dart      # GoRouter + auth redirects
+│   └── theme/                      # AppTheme, colors, fonts, spacing
+│
+├── features/
+│   ├── auth/                       # OKS ID: API, repository, notifier, models
+│   ├── profile/                    # ProfileApi, AccountProfile, permissions
+│   ├── connectivity/               # ConnectivityNotifier
+│   ├── construction_objects/       # JSONPlaceholder API, mapper, ObjectsNotifier
+│   ├── qr_display/                 # QR-пропуск, выбор объекта
+│   ├── qr_scanning/                # Сканер, overlay, mock scan API
+│   ├── access_confirmation/        # Диалоги допуска / отказа
+│   ├── language_switcher/          # RU / KZ
+│   ├── service_switcher/           # Переключатель worker / guard
+│   └── profile/widgets/            # ProfileSheet, AccountProfileSheet
+│
+├── entities/
+│   ├── construction_object/        # ConstructionObject, AccessStatus, repository
+│   ├── user_profile/               # UserProfile (mock)
+│   ├── worker/                     # ScannedWorker
+│   ├── visit_history/              # VisitRecord (mock, UI не используется)
+│   └── service_type/               # ServiceType enum
+│
+├── screens/
+│   ├── auth/                       # AuthScreen, ApprovalWaitingScreen
+│   ├── role_selection/             # RoleSelectionScreen
+│   ├── worker/                     # WorkerMainScreen, ObjectDetailsScreen
+│   └── guard/                      # GuardMainScreen, GuardScannerScreen
+│
+└── shared/
+    ├── api/                        # Dio, ApiConfig, logging
+    ├── auth/                       # Interceptor, TokenStorage
+    ├── constants/app_assets.dart   # Пути к SVG/ресурсам
+    ├── ui/                         # UI-кит, skeleton, offline overlay
+    └── utils/kz_phone_input_formatter.dart
 ```
 
 ---
 
-## Запуск проекта
+## Assets
+
+```
+assets/
+├── crane.svg          # Worker / строительство
+├── barrier.svg        # Guard / КПП
+├── builder.svg        # Иллюстрация auth / empty state
+├── warning.svg        # Offline-overlay, denied state
+├── load.svg           # Spinner-loader
+├── icon_qr.svg        # QR-кнопка
+├── icon_profile.svg   # Профиль
+├── logout.svg         # Выход
+└── fonts/
+    └── Manrope-VariableFont_wght.ttf
+```
+
+---
+
+## Тестирование
 
 ```bash
-# Установка зависимостей
-flutter pub get
-
-# Запуск на подключённом устройстве или эмуляторе
-flutter run
-
-# Сборка release APK
-flutter clean
-flutter build apk --release
+flutter test
 ```
 
-Release APK сохраняется в: `build/app/outputs/flutter-apk/app-release.apk`
+| Файл | Что проверяет |
+|---|---|
+| `test/widget_test.dart` | Smoke-тест: приложение стартует, экран авторизации с кнопкой «Войти» |
+| `test/account_profile_test.dart` | Парсинг permissions и маппинг ролей |
+| `test/connectivity_notifier_test.dart` | Логика определения наличия сети |
 
 ---
 
-## Правила зависимостей слоёв (FSD)
+## Что подключено к API, а что — mock
 
-```
-screens  →  features, entities, shared, app
-features →  entities, shared, app
-entities →  (без импортов «вверх»)
-shared   →  app (только токены темы)
-app      →  features, screens (подключение роутера)
-```
+| Область | Источник данных |
+|---|---|
+| Авторизация (OKS ID) | Production API |
+| Профиль / permissions | Production API (`GET /accounts/me/`) |
+| JWT refresh | Production API |
+| Строительные объекты | Локальные mock + JSONPlaceholder |
+| Профиль в worker bottom sheet | `MockUserRepository` |
+| История посещений | UI-placeholder («в разработке») |
+| QR-сканирование (guard) | `MockScanApi` |
 
-**Принцип работы слоёв:**
+---
 
-- **screens** — собирают экраны из features и shared-виджетов, привязаны к маршрутам.
-- **features** — инкапсулируют одну пользовательскую возможность (сканирование, профиль, QR и т.д.).
-- **entities** — чистые доменные модели и доступ к данным, без UI-зависимостей.
-- **shared** — переиспользуемые UI-блоки уровня дизайн-системы.
-- **app** — глобальная конфигурация: тема, роутинг, корневой виджет.
+## Android
+
+- Разрешение камеры в `AndroidManifest.xml` для QR-сканера.
+- ProGuard rules для ML Kit barcode scanning в release-сборках.
+- Package: `com.oksgroup.oks_qr_mobile`.
