@@ -35,13 +35,13 @@ class GuardMainScreen extends StatelessWidget {
                   title: 'Охрана (КПП)',
                   onLogoTap: () => context.go('/roles'),
                 ),
-                const SizedBox(height: AppSpacing.lg),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                const SizedBox(height: 200),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     AppAssetIcon(
                       asset: AppAssets.crane,
-                      size: 24,
+                      size: 50,
                       color: const Color(0xFF9296E3),
                       fallbackIcon: Icons.construction,
                     ),
@@ -55,10 +55,14 @@ class GuardMainScreen extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: AppSpacing.md),
-                Text(
-                  'Сканируйте пропуск в виде QR и разрешайте или блокируйте пропуск на объект',
-                  style: AppTypography.screenHint.copyWith(
-                    color: AppColors.grey600,
+                Center(
+                  child: 
+                  Text(
+                    'Сканируйте пропуск в виде QR и разрешайте или блокируйте пропуск на объект',
+                    textAlign : TextAlign.center,
+                    style: AppTypography.screenHint.copyWith(
+                      color: AppColors.grey600,
+                    ),
                   ),
                 ),
                 const Spacer(),

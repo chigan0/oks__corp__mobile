@@ -1,6 +1,6 @@
 # OKS QR Mobile
 
-Мобильное приложение **OKS Group** на Flutter для контроля допуска на строительные объекты. Пользователь проходит корпоративную авторизацию через **OKS ID**, получает роль по permissions с бэкенда и работает в одном из двух сервисов:
+Мобильное приложение **OKS Group** на Flutter для контроля допуска на строительные объекты. Пользователь проходит корпоративную авторизацию через **OKS ID**, получает роль по `permissions` с бэкенда и работает в одном из двух сервисов:
 
 | Роль в приложении | Permission (OKS ID) | Сервис |
 |---|---|---|
@@ -129,6 +129,22 @@ AuthScreen                    ApprovalWaitingScreen              RoleSelectionSc
      │                              │ JWT → secure storage           │
 ```
 
+### Экран ожидания (`ApprovalWaitingScreen`)
+
+**Ожидание (`waitingForApproval`):**
+
+- Шапка `OksHeader`: «Авторизация» слева, OKS Group справа (без кнопки «Назад»).
+- Основной текст, номер телефона, подсказка о ~20 минутах ожидания.
+- Иллюстрация `builder.svg` + брендированный spinner `load.svg` по центру.
+
+**Отказ (`denied`):**
+
+- Тот же layout шапки и текста об отказе в доступе.
+- Иллюстрация с badge `warning.svg`.
+- Кнопка **«Вернуться назад»** закреплена внизу экрана → сброс flow и переход на `/`.
+
+Polling останавливается при `authenticated` и `denied`.
+
 ### API-эндпоинты auth
 
 | Метод | Путь | Когда вызывается |
@@ -163,7 +179,7 @@ AuthScreen                    ApprovalWaitingScreen              RoleSelectionSc
 ### Защита от перебора
 
 - После **5 неудачных попыток** входа — блокировка на **65 секунд**.
-- Обратный отсчёт отображается под сообщением о блокировке на экране авторизации.
+- Обратный отсчёт (`MM:SS`) отображается под сообщением о блокировке на экране авторизации.
 - По истечении таймера пользователь может повторить попытку без перезапуска приложения.
 
 ### Persistence pending approval
@@ -218,9 +234,11 @@ lib/shared/api/
    - `facilities:manager` → `ServiceType.guard`
    - `core:security_staff` → `ServiceType.worker`
 
-4. Пользователь видит **только свою роль** (переключатель сервисов скрыт, если роль одна).
-5. Если permissions пуст — сообщение об ошибке, кнопка **«Перейти»** скрыта; доступны **Профиль** и **Выход**.
-6. Нажатие на логотип **OKS Group** в шапке (на всех экранах кроме auth) ведёт на `/roles`.
+4. Пользователь видит **только свою роль** (переключатель `ServiceSwitcher` скрыт, если роль одна).
+5. Если permissions пуст — сообщение об ошибке; кнопка **«Перейти»** скрыта, **Профиль** и **Выход** остаются на своих местах.
+6. Нажатие на логотип **OKS Group** в шапке (на всех экранах **кроме auth**) ведёт на `/roles` через `OksHeader.onLogoTap`.
+
+Профиль на этом экране — **`AccountProfileSheet`** с live-данными из `GET /accounts/me/`.
 
 ---
 
@@ -228,7 +246,7 @@ lib/shared/api/
 
 ```
 /                          → AuthScreen              (ввод телефона)
-/approval-waiting          → ApprovalWaitingScreen   (polling admin approval)
+/approval-waiting          → ApprovalWaitingScreen   (polling / denied)
 /roles                     → RoleSelectionScreen     (Мои сервисы)
 /worker                    → WorkerMainScreen        (Мой пропуск)
 /worker/object/:id         → ObjectDetailsScreen     (карточка объекта)
@@ -240,8 +258,9 @@ lib/shared/api/
 
 - Неавторизованный пользователь может находиться только на `/` и `/approval-waiting`.
 - При `isWaitingForApproval` и переходе на `/` — редирект на `/approval-waiting`.
+- На `/approval-waiting` разрешено оставаться при `isDenied` (экран отказа с кнопкой «Вернуться назад»).
 - Авторизованный на auth-маршрутах — редирект на `/roles`.
-- `GoRouter.refreshListenable` привязан к `AuthNotifier` — роутер реагирует на смену auth-состояния.
+- `GoRouter.refreshListenable` привязан к `AuthNotifier`.
 
 ---
 
@@ -268,7 +287,27 @@ lib/shared/api/
 
 При ошибке загрузки API приложение продолжает работать с локальными mock-данными.
 
-Профиль работника в bottom sheet пока берётся из **`MockUserRepository`** (UI-заглушка). Аккаунт с бэкенда — через **`AccountProfileSheet`** (`GET /accounts/me/`) на экране «Мои сервисы».
+### Профиль worker
+
+**`ProfileSheet`** (нижняя панель worker / детали объекта) — гибридная модель:
+
+- Имя, компания, ИИН, документы — из **`MockUserRepository`**.
+- **Телефон** — из **`GET /accounts/me/`** (при ошибке API — fallback на mock).
+
+---
+
+## Modal bottom sheets
+
+Общая инфраструктура вынесена в **`shared/ui/bottom_sheet_launchers.dart`**:
+
+| Функция | Назначение |
+|---|---|
+| `showAppModalBottomSheet` | Draggable sheet с настраиваемой высотой |
+| `showFixedModalBottomSheet` | Фиксированная высота (min = max = initial) |
+| `showQrPassModalBottomSheet` | QR-пропуск на **75%** высоты экрана |
+| `showLanguageModalBottomSheet` | Выбор языка на **40%** высоты |
+
+Контент листов оборачивается в **`AppBottomSheetShell`** (`shared/ui/bottom_sheets/`).
 
 ---
 
@@ -281,20 +320,21 @@ RoleSelectionScreen
   → WorkerMainScreen
       ├── Вкладка «Объекты»     → ObjectCard → ObjectDetailsScreen
       ├── Вкладка «История»     → placeholder «блок в разработке»
-      ├── Нижняя панель: Профиль → ProfileSheet (mock)
+      ├── Нижняя панель: Профиль → ProfileSheet (mock + телефон с API)
       ├── Нижняя панель: QR     → ObjectSelectSheet → QrPassSheet
       └── Нижняя панель: Язык   → LanguageSheet (RU ↔ KZ)
 ```
 
-Верхний блок (шапка, табы, подсказка) **закреплён** — скроллятся только карточки объектов.
-
-Системная кнопка «Назад» на worker-экранах возвращает на `/roles`.
+- Верхний блок (шапка, табы, подсказка) **закреплён** — скроллятся только карточки объектов / текст истории.
+- Нижняя панель `FloatingBottomBar` с отступом `bottomBarBottomInset = 38px`.
+- Системная кнопка «Назад» возвращает на `/roles`.
 
 ### Guard (охранник)
 
 ```
 RoleSelectionScreen
   → GuardMainScreen
+      → кнопка «Отсканировать пропуск»
       → GuardScannerScreen
           ├── Скан QR → ConfirmAccessSheet
           ├── Допуск  → SuccessDialog
@@ -302,9 +342,9 @@ RoleSelectionScreen
           └── Невалидный QR → RejectDialog
 ```
 
-Сканирование — mock через **`MockScanApi`** (имитация задержки и ответа).
-
-Системная кнопка «Назад» на guard-экранах возвращает на `/roles`.
+- На главном экране guard: объект, подсказка и жёлтая кнопка сканирования (`YellowActionButton`).
+- Сканирование — mock через **`MockScanApi`**.
+- Системная кнопка «Назад» возвращает на `/roles`.
 
 ---
 
@@ -312,11 +352,12 @@ RoleSelectionScreen
 
 | Компонент | Файл | Назначение |
 |---|---|---|
-| `OksHeader` / `OksGroupLogo` | `shared/ui/oks_header.dart` | Шапка экрана + wordmark OKS Group |
+| `OksHeader` / `OksGroupLogo` | `shared/ui/oks_header.dart` | Шапка + wordmark (опциональный `onLogoTap`) |
 | `AppPrimaryButton` | `shared/ui/app_primary_button.dart` | Основная тёмная кнопка |
 | `SheetIconButton` | `shared/ui/bottom_sheets/sheet_icon_button.dart` | Круглая кнопка 42×42 с тенью |
-| `FloatingBottomBar` | `shared/ui/floating_bottom_bar.dart` | Нижняя панель worker (профиль / QR / язык) |
+| `FloatingBottomBar` | `shared/ui/floating_bottom_bar.dart` | Нижняя панель worker |
 | `AppBottomSheetShell` | `shared/ui/bottom_sheets/app_bottom_sheet_shell.dart` | Стандартный modal bottom sheet |
+| `bottom_sheet_launchers.dart` | `shared/ui/bottom_sheet_launchers.dart` | Хелперы открытия листов |
 | `SegmentTabs` | `shared/ui/segment_tabs.dart` | Переключатель «Объекты / История» |
 | `ObjectCard` | `shared/ui/object_card.dart` | Карточка объекта в списке |
 | `SpinningAsset` | `shared/ui/spinning_asset.dart` | Брендированный loader |
@@ -346,15 +387,14 @@ lib/
 │   ├── qr_display/                 # QR-пропуск, выбор объекта
 │   ├── qr_scanning/                # Сканер, overlay, mock scan API
 │   ├── access_confirmation/        # Диалоги допуска / отказа
-│   ├── language_switcher/          # RU / KZ
+│   ├── language_switcher/          # RU / KZ (toggle + setLanguage)
 │   ├── service_switcher/           # Переключатель worker / guard
 │   └── profile/widgets/            # ProfileSheet, AccountProfileSheet
 │
 ├── entities/
-│   ├── construction_object/        # ConstructionObject, AccessStatus, repository
+│   ├── construction_object/        # ConstructionObject, ObjectRepository
 │   ├── user_profile/               # UserProfile (mock)
 │   ├── worker/                     # ScannedWorker
-│   ├── visit_history/              # VisitRecord (mock, UI не используется)
 │   └── service_type/               # ServiceType enum
 │
 ├── screens/
@@ -367,7 +407,7 @@ lib/
     ├── api/                        # Dio, ApiConfig, logging
     ├── auth/                       # Interceptor, TokenStorage
     ├── constants/app_assets.dart   # Пути к SVG/ресурсам
-    ├── ui/                         # UI-кит, skeleton, offline overlay
+    ├── ui/                         # UI-кит, skeleton, offline overlay, launchers
     └── utils/kz_phone_input_formatter.dart
 ```
 
@@ -379,7 +419,7 @@ lib/
 assets/
 ├── crane.svg          # Worker / строительство
 ├── barrier.svg        # Guard / КПП
-├── builder.svg        # Иллюстрация auth / empty state
+├── builder.svg        # Иллюстрация auth
 ├── warning.svg        # Offline-overlay, denied state
 ├── load.svg           # Spinner-loader
 ├── icon_qr.svg        # QR-кнопка
@@ -410,11 +450,11 @@ flutter test
 | Область | Источник данных |
 |---|---|
 | Авторизация (OKS ID) | Production API |
-| Профиль / permissions | Production API (`GET /accounts/me/`) |
+| Профиль / permissions (`/roles`) | Production API (`GET /accounts/me/`) |
+| Телефон в worker ProfileSheet | Production API (остальное — mock) |
 | JWT refresh | Production API |
 | Строительные объекты | Локальные mock + JSONPlaceholder |
-| Профиль в worker bottom sheet | `MockUserRepository` |
-| История посещений | UI-placeholder («в разработке») |
+| История посещений (worker) | UI-placeholder («в разработке») |
 | QR-сканирование (guard) | `MockScanApi` |
 
 ---

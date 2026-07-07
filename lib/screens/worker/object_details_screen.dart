@@ -8,10 +8,12 @@ import '../../app/theme/app_spacing.dart';
 import '../../app/theme/app_typography.dart';
 import '../../entities/construction_object/model/construction_object.dart';
 import '../../entities/construction_object/model/object_status.dart';
+import '../../entities/user_profile/model/user_profile.dart';
 import '../../features/construction_objects/objects_notifier.dart';
 import '../../entities/user_profile/repository/mock_user_repository.dart';
 import '../../features/language_switcher/language_notifier.dart';
 import '../../features/language_switcher/widgets/language_sheet.dart';
+import '../../features/profile/api/profile_api.dart';
 import '../../features/profile/widgets/profile_sheet.dart';
 import '../../features/qr_display/widgets/object_select_sheet.dart';
 import '../../features/qr_display/widgets/qr_pass_sheet.dart';
@@ -27,8 +29,25 @@ class ObjectDetailsScreen extends StatelessWidget {
 
   final String objectId;
 
-  void _showProfile(BuildContext context, bool isKz) {
-    final profile = MockUserRepository.instance.workerProfile;
+  Future<void> _showProfile(BuildContext context, bool isKz) async {
+    final mockProfile = MockUserRepository.instance.workerProfile;
+    var phone = mockProfile.phone;
+    try {
+      final account = await context.read<ProfileApi>().fetchProfile();
+      phone = account.phone;
+    } catch (_) {
+      // Fall back to the mock phone if the profile request fails.
+    }
+    if (!context.mounted) return;
+
+    final profile = UserProfile(
+      id: mockProfile.id,
+      fullName: mockProfile.fullName,
+      company: mockProfile.company,
+      iin: mockProfile.iin,
+      phone: phone,
+      documents: mockProfile.documents,
+    );
     showAppModalBottomSheet<void>(
       context,
       ProfileSheet(

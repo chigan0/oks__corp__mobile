@@ -6,7 +6,7 @@ enum ServiceType {
 extension ServiceTypeX on ServiceType {
   String get title {
     return switch (this) {
-      ServiceType.worker => 'Сервис юзеров',
+      ServiceType.worker => 'Сервис подрядчиков',
       ServiceType.guard => 'Сервис охранников',
     };
   }

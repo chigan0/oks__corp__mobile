@@ -13,7 +13,6 @@ import '../../shared/api/api_config.dart';
 import '../../shared/constants/app_assets.dart';
 import '../../shared/ui/app_asset_icon.dart';
 import '../../shared/ui/app_primary_button.dart';
-import '../../shared/ui/bottom_sheets/sheet_icon_button.dart';
 import '../../shared/ui/oks_header.dart';
 import '../../shared/ui/spinning_asset.dart';
 
@@ -86,122 +85,118 @@ class _ApprovalWaitingScreenState extends State<ApprovalWaitingScreen> {
 
     return Scaffold(
       body: SafeArea(
-        child: Stack(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxl),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+            Expanded(
+              child: Stack(
                 children: [
-                  const SizedBox(height: AppSpacing.lg),
                   Padding(
-                    padding: const EdgeInsets.only(
-                      top: AppSpacing.screenHeaderTopInset,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.xxl,
                     ),
-                    child: Stack(
-                      alignment: Alignment.center,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
+                        const SizedBox(height: AppSpacing.lg),
+                        const OksHeader(title: 'Авторизация'),
+                        const SizedBox(height: AppSpacing.xxl),
                         Text(
-                          'Авторизация',
+                          isDenied
+                              ? 'К сожалению, вам отказано в доступе. Обратитесь в OKS Pulse'
+                              : 'Пожалуйста, подождите подтверждения входа от OKS Group',
                           textAlign: TextAlign.center,
                           style: manropeTextStyle(
-                            fontSize: 20,
-                            fontWeight: AppFontWeight.semiBold,
+                            fontSize: 16,
+                            fontWeight: AppFontWeight.regular,
                             color: AppColors.grey950,
-                            height: 1.0,
+                            height: 1.4,
                           ),
                         ),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            SheetIconButton(
-                              icon: Icons.chevron_left,
-                              onPressed: _goBack,
+                        if (!isDenied) ...[
+                          const SizedBox(height: AppSpacing.lg),
+                          Text(
+                            phone,
+                            textAlign: TextAlign.center,
+                            style: manropeTextStyle(
+                              fontSize: 15,
+                              fontWeight: AppFontWeight.regular,
+                              color: AppColors.grey600,
                             ),
-                            const OksGroupLogo(),
-                          ],
+                          ),
+                          const SizedBox(height: AppSpacing.lg),
+                          Text(
+                            'Предоставление доступа от OKS Group займёт примерно 20 минут. Пожалуйста, ожидайте.',
+                            textAlign: TextAlign.center,
+                            style: manropeTextStyle(
+                              fontSize: 14,
+                              fontWeight: AppFontWeight.regular,
+                              color: AppColors.grey600,
+                              height: 1.4,
+                            ),
+                          ),
+                        ],
+                        const Spacer(flex: 2),
+                        Center(
+                          child: SizedBox(
+                            width: _illustrationWidth,
+                            height:
+                                _illustrationWidth * _illustrationAspectRatio,
+                            child: Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                Positioned.fill(
+                                  child: SvgPicture.asset(
+                                    AppAssets.builder,
+                                    fit: BoxFit.contain,
+                                  ),
+                                ),
+                                if (isDenied)
+                                  const Positioned(
+                                    top: -8,
+                                    right: 4,
+                                    child: AppAssetIcon(
+                                      asset: AppAssets.warning,
+                                      size: 52,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
                         ),
+                        const Spacer(flex: 3),
+                        if (errorMessage != null && !isDenied)
+                          Text(
+                            errorMessage,
+                            textAlign: TextAlign.center,
+                            style: manropeTextStyle(
+                              fontSize: 14,
+                              fontWeight: AppFontWeight.regular,
+                              color: AppColors.red,
+                            ),
+                          ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: AppSpacing.xxl),
-                  Text(
-                    isDenied
-                        ? 'К сожалению, вам отказано в доступе. Обратитесь в OKS Pulse'
-                        : 'Пожалуйста, подождите подтверждения входа от OKS Group',
-                    textAlign: TextAlign.center,
-                    style: manropeTextStyle(
-                      fontSize: 16,
-                      fontWeight: AppFontWeight.regular,
-                      color: AppColors.grey950,
-                      height: 1.4,
+                  if (!isDenied)
+                    const Center(
+                      child: SpinningAsset(asset: AppAssets.load, size: 56),
                     ),
-                  ),
-                  if (!isDenied) ...[
-                    const SizedBox(height: AppSpacing.lg),
-                    Text(
-                      phone,
-                      textAlign: TextAlign.center,
-                      style: manropeTextStyle(
-                        fontSize: 15,
-                        fontWeight: AppFontWeight.regular,
-                        color: AppColors.grey600,
-                      ),
-                    ),
-                  ],
-                  const Spacer(flex: 2),
-                  Center(
-                    child: SizedBox(
-                      width: _illustrationWidth,
-                      height: _illustrationWidth * _illustrationAspectRatio,
-                      child: Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          Positioned.fill(
-                            child: SvgPicture.asset(
-                              AppAssets.builder,
-                              fit: BoxFit.contain,
-                            ),
-                          ),
-                          if (isDenied)
-                            const Positioned(
-                              top: -8,
-                              right: 4,
-                              child: AppAssetIcon(
-                                asset: AppAssets.warning,
-                                size: 52,
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const Spacer(flex: 3),
-                  if (errorMessage != null && !isDenied) ...[
-                    Text(
-                      errorMessage,
-                      textAlign: TextAlign.center,
-                      style: manropeTextStyle(
-                        fontSize: 14,
-                        fontWeight: AppFontWeight.regular,
-                        color: AppColors.red,
-                      ),
-                    ),
-                    const SizedBox(height: AppSpacing.lg),
-                  ],
-                  if (isDenied)
-                    AppPrimaryButton(
-                      label: 'Вернуться назад',
-                      onPressed: _goBack,
-                    ),
-                  const SizedBox(height: AppSpacing.xxl),
                 ],
               ),
             ),
-            if (!isDenied)
-              const Center(
-                child: SpinningAsset(asset: AppAssets.load, size: 56),
+            if (isDenied)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.xxl,
+                  0,
+                  AppSpacing.xxl,
+                  AppSpacing.xxl,
+                ),
+                child: AppPrimaryButton(
+                  label: 'Вернуться назад',
+                  onPressed: _goBack,
+                ),
               ),
           ],
         ),
