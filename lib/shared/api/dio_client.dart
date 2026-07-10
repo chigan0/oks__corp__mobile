@@ -6,10 +6,10 @@ import 'api_config.dart';
 import 'dio_logging.dart';
 
 /// Plain Dio client for unauthenticated requests (login / refresh).
-Dio createPublicDio({String logTag = 'DioPublic'}) {
+Dio createPublicDio({String logTag = 'DioPublic', String? baseUrl}) {
   final dio = Dio(
     BaseOptions(
-      baseUrl: ApiConfig.baseUrl,
+      baseUrl: baseUrl ?? ApiConfig.baseUrl,
       connectTimeout: ApiConfig.connectTimeout,
       receiveTimeout: ApiConfig.receiveTimeout,
       headers: {
@@ -29,8 +29,9 @@ Dio createAuthenticatedDio({
   required RefreshAccessTokenCallback refreshAccessToken,
   required SessionExpiredCallback onSessionExpired,
   String logTag = 'DioAuth',
+  String? baseUrl,
 }) {
-  final dio = createPublicDio(logTag: logTag);
+  final dio = createPublicDio(logTag: logTag, baseUrl: baseUrl);
 
   dio.interceptors.add(
     AuthInterceptor(

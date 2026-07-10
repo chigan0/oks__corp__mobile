@@ -2,20 +2,24 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/theme/app_colors.dart';
+import '../../app/theme/app_fonts.dart';
 import '../../app/theme/app_spacing.dart';
 import '../../app/theme/app_typography.dart';
 import '../../entities/construction_object/model/construction_object.dart';
+import '../../entities/construction_object/model/facility_document.dart';
 import '../../entities/construction_object/model/object_status.dart';
 import '../../entities/user_profile/model/user_profile.dart';
-import '../../features/construction_objects/objects_notifier.dart';
 import '../../entities/user_profile/repository/mock_user_repository.dart';
+import '../../features/construction_objects/api/facilities_api.dart';
+import '../../features/construction_objects/facility_details_notifier.dart';
+import '../../features/construction_objects/objects_notifier.dart';
 import '../../features/language_switcher/language_notifier.dart';
 import '../../features/language_switcher/widgets/language_sheet.dart';
 import '../../features/profile/api/profile_api.dart';
 import '../../features/profile/widgets/profile_sheet.dart';
-import '../../features/qr_display/widgets/object_select_sheet.dart';
 import '../../features/qr_display/widgets/qr_pass_sheet.dart';
 import '../../shared/ui/bottom_sheet_launchers.dart';
 import '../../shared/ui/detail_row.dart';
@@ -26,6 +30,23 @@ import '../../shared/ui/status_badge.dart';
 
 class ObjectDetailsScreen extends StatelessWidget {
   const ObjectDetailsScreen({super.key, required this.objectId});
+
+  final String objectId;
+
+  @override
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider<FacilityDetailsNotifier>(
+      create: (ctx) => FacilityDetailsNotifier(
+        api: ctx.read<FacilitiesApi>(),
+        facilityUuid: objectId,
+      ),
+      child: _ObjectDetailsBody(objectId: objectId),
+    );
+  }
+}
+
+class _ObjectDetailsBody extends StatelessWidget {
+  const _ObjectDetailsBody({required this.objectId});
 
   final String objectId;
 
@@ -59,25 +80,6 @@ class ObjectDetailsScreen extends StatelessWidget {
     );
   }
 
-  void _showObjectSelect(BuildContext context, bool isKz) {
-    final objects = context.read<ObjectsNotifier>().getAccessibleObjects();
-    showAppModalBottomSheet<void>(
-      context,
-      Builder(
-        builder: (sheetContext) => ObjectSelectSheet(
-          objects: objects,
-          isKz: isKz,
-          onClose: () => Navigator.of(sheetContext).pop(),
-          onSelect: (object) {
-            Navigator.of(sheetContext).pop();
-            _showQrPass(context, object, isKz);
-          },
-        ),
-      ),
-      initialChildSize: 0.5,
-    );
-  }
-
   void _showLanguage(BuildContext context, bool isKz) {
     final notifier = context.read<LanguageNotifier>();
     showLanguageModalBottomSheet<void>(
@@ -101,14 +103,21 @@ class ObjectDetailsScreen extends StatelessWidget {
         builder: (sheetContext) => QrPassSheet(
           object: object,
           isKz: isKz,
-          onBack: () {
-            Navigator.of(sheetContext).pop();
-            _showObjectSelect(context, isKz);
-          },
+          onBack: () => Navigator.of(sheetContext).pop(),
           onClose: () => Navigator.of(sheetContext).pop(),
         ),
       ),
     );
+  }
+
+  Future<void> _openDocument(BuildContext context, FacilityDocument document) async {
+    final uri = Uri.tryParse(document.url);
+    final opened = uri != null && await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!opened && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось открыть «${document.name}»')),
+      );
+    }
   }
 
   @override
@@ -116,12 +125,12 @@ class ObjectDetailsScreen extends StatelessWidget {
     final objectsNotifier = context.watch<ObjectsNotifier>();
     final object = objectsNotifier.findById(objectId);
     final isKz = context.watch<LanguageNotifier>().isKz;
-    final dateFormat = DateFormat('dd.MM.yyyy');
+    final detailsNotifier = context.watch<FacilityDetailsNotifier>();
 
     if (object == null && objectsNotifier.isLoading) {
-      return Scaffold(
+      return const Scaffold(
         backgroundColor: AppColors.background,
-        body: const Center(child: CircularProgressIndicator()),
+        body: Center(child: CircularProgressIndicator()),
       );
     }
 
@@ -170,47 +179,14 @@ class ObjectDetailsScreen extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: AppSpacing.xl),
-                      DetailInfoPanel(
-                        children: [
-                          DetailRow(
-                            label: isKz ? 'Мекенжай' : 'Адрес',
-                            value: object.address,
-                          ),
-                          DetailRow(
-                            label: isKz ? 'Нысан статусы' : 'Статус объекта',
-                            value: object.objectStatus.labelRu(isKz),
-                          ),
-                          DetailRow(
-                            label: isKz ? 'Рұқсат статусы' : 'Статус допуска',
-                            valueWidget: StatusBadge(
-                              status: object.accessStatus,
-                              isKz: isKz,
-                            ),
-                          ),
-                          DetailRow(
-                            label: isKz ? 'Берілген күні' : 'Дата выдачи',
-                            value: dateFormat.format(object.issueDate),
-                          ),
-                          if (object.accessExpiryDate != null)
-                            DetailRow(
-                              label: isKz ? 'Рұқсат мерзімі' : 'Срок допуска',
-                              value: dateFormat.format(object.accessExpiryDate!),
-                            ),
-                        ],
-                      ),
+                      _DetailsSection(notifier: detailsNotifier, isKz: isKz),
                       const SizedBox(height: AppSpacing.xl),
                       Text(docsLabel, style: AppTypography.profileSectionTitle),
                       const SizedBox(height: AppSpacing.lg),
-                      Column(
-                        children: [
-                          for (var i = 0; i < object.documents.length; i++) ...[
-                            if (i > 0) const SizedBox(height: AppSpacing.sm),
-                            DocumentTile(
-                              fileName: object.documents[i].fileName,
-                              uploadedAt: object.documents[i].uploadedAt,
-                            ),
-                          ],
-                        ],
+                      _DocumentsSection(
+                        notifier: detailsNotifier,
+                        isKz: isKz,
+                        onOpen: (doc) => _openDocument(context, doc),
                       ),
                     ],
                   ),
@@ -219,13 +195,151 @@ class ObjectDetailsScreen extends StatelessWidget {
               FloatingBottomBar(
                 qrLabel: qrLabel,
                 onProfile: () => _showProfile(context, isKz),
-                onShowQr: () => _showObjectSelect(context, isKz),
+                onShowQr: () => _showQrPass(context, object, isKz),
                 onLanguage: () => _showLanguage(context, isKz),
               ),
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+class _DetailsSection extends StatelessWidget {
+  const _DetailsSection({required this.notifier, required this.isKz});
+
+  final FacilityDetailsNotifier notifier;
+  final bool isKz;
+
+  @override
+  Widget build(BuildContext context) {
+    if (notifier.detailsStatus == FacilityLoadStatus.loading) {
+      return const DetailInfoPanel(isLoading: true, children: []);
+    }
+
+    if (notifier.detailsStatus == FacilityLoadStatus.error) {
+      return _InlineError(
+        message: notifier.detailsError?.message ??
+            (isKz ? 'Деректерді жүктеу мүмкін болмады' : 'Не удалось загрузить данные'),
+        onRetry: notifier.loadDetails,
+      );
+    }
+
+    final details = notifier.details!;
+    final dateFormat = DateFormat('dd.MM.yyyy');
+
+    return DetailInfoPanel(
+      children: [
+        DetailRow(
+          label: isKz ? 'Мекенжай' : 'Адрес',
+          value: details.address,
+        ),
+        DetailRow(
+          label: isKz ? 'Нысан статусы' : 'Статус объекта',
+          value: details.status.labelRu(isKz),
+        ),
+        DetailRow(
+          label: isKz ? 'Рұқсат статусы' : 'Статус допуска',
+          valueWidget: StatusBadge(status: details.accessStatus, isKz: isKz),
+        ),
+        if (details.issuedAt != null)
+          DetailRow(
+            label: isKz ? 'Берілген күні' : 'Дата выдачи',
+            value: dateFormat.format(details.issuedAt!),
+          ),
+        if (details.plannedStartYear != null)
+          DetailRow(
+            label: isKz ? 'Құрылыс басталуы' : 'Начало строительства',
+            value: _quarterYear(details.plannedStartQuarter, details.plannedStartYear!, isKz),
+          ),
+        if (details.plannedYear > 0)
+          DetailRow(
+            label: isKz ? 'Тапсыру мерзімі' : 'Плановый срок сдачи',
+            value: _quarterYear(details.plannedQuarter, details.plannedYear, isKz),
+          ),
+      ],
+    );
+  }
+
+  String _quarterYear(String? quarter, int year, bool isKz) {
+    if (quarter == null || quarter.isEmpty) return '$year';
+    return isKz ? '$year ж. $quarter тоқсан' : '$quarter кв. $year';
+  }
+}
+
+class _DocumentsSection extends StatelessWidget {
+  const _DocumentsSection({
+    required this.notifier,
+    required this.isKz,
+    required this.onOpen,
+  });
+
+  final FacilityDetailsNotifier notifier;
+  final bool isKz;
+  final ValueChanged<FacilityDocument> onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    if (notifier.documentsStatus == FacilityLoadStatus.loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (notifier.documentsStatus == FacilityLoadStatus.error) {
+      return _InlineError(
+        message: notifier.documentsError?.message ??
+            (isKz ? 'Құжаттарды жүктеу мүмкін болмады' : 'Не удалось загрузить документы'),
+        onRetry: notifier.loadDocuments,
+      );
+    }
+
+    final documents = notifier.documents;
+    if (documents.isEmpty) {
+      return Text(
+        isKz ? 'Құжаттар жоқ' : 'Документов пока нет',
+        style: AppTypography.screenHint,
+      );
+    }
+
+    return Column(
+      children: [
+        for (var i = 0; i < documents.length; i++) ...[
+          if (i > 0) const SizedBox(height: AppSpacing.sm),
+          DocumentTile(
+            fileName: documents[i].name,
+            onDownload: () => onOpen(documents[i]),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _InlineError extends StatelessWidget {
+  const _InlineError({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          message,
+          style: const TextStyle(
+            fontFamily: AppFonts.manrope,
+            fontSize: 14,
+            color: AppColors.redText,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.xs),
+        TextButton(
+          onPressed: onRetry,
+          child: const Text('Повторить'),
+        ),
+      ],
     );
   }
 }

@@ -22,11 +22,16 @@ class OksQrApp extends StatelessWidget {
         Provider.value(value: dependencies.authenticatedDio),
         Provider.value(value: dependencies.tokenStorage),
         Provider.value(value: dependencies.profileApi),
+        Provider.value(value: dependencies.qrGenerationApi),
+        Provider.value(value: dependencies.qrValidationApi),
+        Provider.value(value: dependencies.facilitiesApi),
         ChangeNotifierProvider(
           create: (_) => ConnectivityNotifier()..init(),
         ),
         ChangeNotifierProvider(create: (_) => LanguageNotifier()),
-        ChangeNotifierProvider(create: (_) => ObjectsNotifier()),
+        ChangeNotifierProvider(
+          create: (_) => ObjectsNotifier(api: dependencies.facilitiesApi),
+        ),
       ],
       child: MaterialApp.router(
         title: 'OKS Corp',

@@ -10,20 +10,21 @@ class DocumentTile extends StatelessWidget {
   const DocumentTile({
     super.key,
     required this.fileName,
-    required this.uploadedAt,
+    this.uploadedAt,
     this.onDownload,
   });
 
   final String fileName;
-  final DateTime uploadedAt;
+
+  /// Upload timestamp, when known (e.g. personal profile documents).
+  /// Facility documents from the API don't carry one.
+  final DateTime? uploadedAt;
   final VoidCallback? onDownload;
 
   static const _downloadPadding = 9.0;
 
   @override
   Widget build(BuildContext context) {
-    final dateStr = DateFormat('dd.MM.yyyy HH:mm').format(uploadedAt);
-
     return Container(
       margin: const EdgeInsets.only(bottom: 0),
       padding: const EdgeInsets.symmetric(
@@ -41,8 +42,13 @@ class DocumentTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(fileName, style: AppTypography.documentFileName),
-                const SizedBox(height: AppSpacing.xs),
-                Text(dateStr, style: AppTypography.documentDate),
+                if (uploadedAt != null) ...[
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(
+                    DateFormat('dd.MM.yyyy HH:mm').format(uploadedAt!),
+                    style: AppTypography.documentDate,
+                  ),
+                ],
               ],
             ),
           ),

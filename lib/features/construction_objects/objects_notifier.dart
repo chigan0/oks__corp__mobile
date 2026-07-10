@@ -1,38 +1,37 @@
 import 'package:flutter/foundation.dart';
 
-import '../../entities/construction_object/model/access_status.dart';
 import '../../entities/construction_object/model/construction_object.dart';
-import '../../entities/construction_object/repository/object_repository.dart';
+import 'api/facilities_api.dart';
 
 class ObjectsNotifier extends ChangeNotifier {
-  ObjectsNotifier({ObjectRepository? repository})
-      : _repository = repository ?? ObjectRepository.instance {
-    _objects = _repository.localObjects;
+  ObjectsNotifier({required FacilitiesApi api}) : _api = api {
     _load();
   }
 
-  final ObjectRepository _repository;
+  final FacilitiesApi _api;
 
   List<ConstructionObject> _objects = [];
-  bool _isLoading = false;
+  bool _isLoading = true;
   String? _error;
 
   List<ConstructionObject> get objects => _objects;
   bool get isLoading => _isLoading;
   String? get error => _error;
 
-  Future<void> _load() async {
+  Future<void> _load() => reload();
+
+  Future<void> reload() async {
     _isLoading = true;
     _error = null;
     notifyListeners();
 
     try {
-      _objects = await _repository.loadObjects();
+      _objects = await _api.fetchFacilities();
     } catch (error, stackTrace) {
-      debugPrint('Failed to load objects from JSONPlaceholder: $error');
+      debugPrint('Failed to load facilities: $error');
       debugPrint('$stackTrace');
       _error = error.toString();
-      _objects = _repository.localObjects;
+      _objects = [];
     }
 
     _isLoading = false;
@@ -48,6 +47,6 @@ class ObjectsNotifier extends ChangeNotifier {
   }
 
   List<ConstructionObject> getAccessibleObjects() {
-    return _objects.where((o) => o.accessStatus.isGranted).toList();
+    return _objects.where((o) => o.hasAccess).toList();
   }
 }
