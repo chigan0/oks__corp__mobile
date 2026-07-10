@@ -167,6 +167,10 @@ class AuthNotifier extends ChangeNotifier {
 
       switch (response.status) {
         case ApprovalStatusType.pending:
+          if (_errorMessage != null) {
+            _errorMessage = null;
+            notifyListeners();
+          }
           return;
         case ApprovalStatusType.denied:
           _denialReason = response.reason;
@@ -178,15 +182,16 @@ class AuthNotifier extends ChangeNotifier {
           await _verifyApprovalAndAuthenticate();
       }
     } on DioException catch (error, stackTrace) {
+      // Poll requests fail transiently on flaky mobile networks; keep waiting
+      // and retry on the next tick instead of kicking the user back to the
+      // phone screen while the approval request is still pending server-side.
       logDioException(error, tag: 'AuthNotifier.pollApprovalStatus');
       debugPrint('[AuthNotifier] stackTrace: $stackTrace');
-      _state = AuthFlowState.error;
       _errorMessage = _mapError(error);
       notifyListeners();
     } catch (error, stackTrace) {
       debugPrint('[AuthNotifier] pollApprovalStatus failed: $error');
       debugPrint('[AuthNotifier] stackTrace: $stackTrace');
-      _state = AuthFlowState.error;
       _errorMessage = _mapError(error);
       notifyListeners();
     }
@@ -211,16 +216,18 @@ class AuthNotifier extends ChangeNotifier {
       notifyListeners();
       rethrow;
     } on DioException catch (error, stackTrace) {
+      // The approval was already confirmed server-side; a transient network
+      // failure here shouldn't drop the user back to the phone screen. Stay
+      // in waitingForApproval so the next poll tick re-detects "approved"
+      // and retries verification automatically.
       logDioException(error, tag: 'AuthNotifier.verifyApproval');
       debugPrint('[AuthNotifier] stackTrace: $stackTrace');
-      _state = AuthFlowState.error;
       _errorMessage = _mapError(error);
       notifyListeners();
       rethrow;
     } catch (error, stackTrace) {
       debugPrint('[AuthNotifier] verifyApproval failed: $error');
       debugPrint('[AuthNotifier] stackTrace: $stackTrace');
-      _state = AuthFlowState.error;
       _errorMessage = _mapError(error);
       notifyListeners();
       rethrow;
